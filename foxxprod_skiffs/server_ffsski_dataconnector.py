@@ -56,13 +56,16 @@ def handle_client(conn, addr, log_widget):
             if data == "PING;":
                 last_ping_time = time.time()
                 conn.sendall("PING;PONG\r\n".encode('utf-8'))
+                break
                 
             elif data == "RANKING;":
                 result = query_database()
                 response = f"RANKING;{result}\r\n"
                 conn.sendall(response.encode('utf-8'))
+                break
             else:
                 log_widget.insert(tk.END, f"Message non reconnu: {data}\n")
+                break
     except Exception as e:
         log_widget.insert(tk.END, f"Erreur: {e}\n")
     finally:
