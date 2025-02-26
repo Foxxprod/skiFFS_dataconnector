@@ -2,18 +2,40 @@ dofile('./interface/interface.lua');
 dofile('./interface/adv.lua');
 dofile('./interface/device.lua');
 
+
 -- Information : Num�ro de Version, Nom, Interface
 function device.GetInformation()
-	return { version = 2.3, name = 'FOXXPROD_DATACONNECTOR', class = 'display', interface = {} };
+	return { version = 2.7, name = 'FOXX PROD TV - DATACONNECTOR', class = 'display', interface = {} };
 end	
+
+-- Configuration du Device
+function device.OnConfiguration(node)
+	wndPresentation.ShowModalConfig(node);
+end
 
 -- Ouverture
 function device.OnInit(params)
 
 	-- Connexion Base MySQL "tv"
-	device.dbTV = sqlBase.ConnectMySQL('localhost', 'tv', 'root', '', 3306);
+	device.dbTV = sqlBase.ConnectMySQL('localhost', 'foxxprod', 'root', '', 3306);
 	if device.dbTV == nil then
-		adv.Error("Erreur Connexion Base TV");
+		-- Creation Base TV
+		local base = sqlBase.Clone();
+		base:Query("CREATE DATABASE foxxprod");
+		base:Delete();
+		
+		device.dbTV = sqlBase.ConnectMySQL('localhost', 'foxxprod', 'root', '', 3306);
+		if device.dbTV == nil then
+			adv.Error("Erreur Connexion Base foxxprod");
+			return;
+		end
+		-- Creation des Tables 
+		if device.dbTV:ScriptSQL('./process/base_tv.sql') == true then
+			adv.Success("Creation Base foxxprod OK");
+		else
+			adv.Error("Erreur Connexion Base foxxprod");
+			return;
+		end
 	end
 	device.dbTV:Load();
 	
@@ -23,20 +45,22 @@ function device.OnInit(params)
 	local btn_clear = tbNavigation:AddTool("Ecran vide", "./res/32x32_clear.png");
 	local btn_startlist = tbNavigation:AddTool("Liste de D�part", "./res/32x32_order.png");
 	local btn_ranking = tbNavigation:AddTool("Classement", "./res/32x32_ranking.png");
+	local btn_Web = tbNavigation:AddTool("Navigateur", "./res/32x32_web.png");
 
 	tbNavigation:AddSeparator();
-	modeLabel = wnd.CreateStaticText({parent = tbNavigation, label = "Mode StartList" });
+	modeLabel = wnd.CreateStaticText({parent = tbNavigation, label = "Mise a jour de la startlist" });
 	tbNavigation:AddControl(modeLabel);
 	tbNavigation:Realize();
 
 	local mgr = app.GetAuiManager();
-	mgr:AddPane(tbNavigation, { toolbarpane=true, direction='top', caption = 'TV Liste', gripper=true });
+	mgr:AddPane(tbNavigation, { toolbarpane=true, direction='top', caption = 'FoxxProd', gripper=true });
 	mgr:Update();
 
 	-- Prise des Evenements (Bind)
 	tbNavigation:Bind(eventType.MENU, OnModeClear, btn_clear);
 	tbNavigation:Bind(eventType.MENU, OnModeStartlist, btn_startlist);
 	tbNavigation:Bind(eventType.MENU, OnModeRanking, btn_ranking);
+	
 
 	-- Prise valeur offset Horloge PC - Horloge Chrono Officielle
 	local rc, offsetInfo = app.SendNotify('<offset_time_load>');
@@ -52,7 +76,7 @@ function device.OnInit(params)
 	-- Prise Information Coureur ayant le meilleur 
 	local rc, best_time = app.SendNotify('<best_time_load>');
 	device.OnNotifyBestTime('<best_time>', best_time);
-
+	
 	-- Prise des coureurs en course
 	local filter = "if Heure_depart_reelle ~= nil and Heure_depart_reelle >= 0 and Heure_arrivee_reelle == nil then return true else return false end ";
 	local rc, data = app.SendNotify('<ranking_load>', { filter = filter } );
@@ -67,10 +91,6 @@ function device.OnInit(params)
 
 	-- Cr�ation des Timer attach� � la frame ...
 	local mainframe = app.GetAuiFrame();
-
-	device.tm_running = timer.Create(mainframe);
-	mainframe:Bind(eventType.TIMER, OnTimerRunning, device.tm_running);
-	device.tm_running:Start(100);		
 
 	device.tick_finished = -1;
 
@@ -88,15 +108,44 @@ function device.OnInit(params)
 	app.BindNotify("<nb_inter>", device.OnNotifyNbInter);
 
 	-- Mode Ranking par d�faut ...
-    start_server_fp();
+	OnModeStartlist();
 	OnModeRanking();
+	start_server_fp();
 
 	-- Dossard au d�part
 	local rc, bibNext = app.SendNotify("<bib_next_load>");
 	if rc and type(bibNext) == 'table' then
 		device.OnNotifyBibNext('<bib_next>', { bib = bibNext.bib, passage = 0});
 	end
+end
 
+
+function device.SetStartTime()
+
+	local tvEpreuve = device.dbTV:GetTable('Epreuve');
+	if tvEpreuve == nil then return end
+
+	local rc, data = app.SendNotify('<ranking_load>');
+	assert(rc and data.ranking ~= nil and app.GetNameSpace(data.ranking) == 'sqlTableGC');
+	local tRanking = data.ranking;
+	
+	device.dbTV:Query('Delete From Epreuve');
+	tvEpreuve:RemoveAllRows();
+	
+	tRanking:OrderBy('Code_epreuve, Heure_depart_reelle Asc');
+	local epreuvePrev = 0;
+	for i=0, tRanking:GetNbRows()-1 do
+		local epreuve = tRanking:GetCellInt('Code_epreuve', i, 0);
+		if epreuve ~= epreuvePrev then
+			tvEpreuve:GetRecord():Set('Code', epreuve);
+			tvEpreuve:GetRecord():Set('Start', tRanking:GetCellInt('Heure_depart_reelle', i, 0));
+			tvEpreuve:AddRow();
+			epreuvePrev = epreuve;
+		end
+	end
+	
+	device.dbTV:Query('Delete From Epreuve');
+	device.dbTV:TableBulkInsert(tvEpreuve);
 end
 
 -- Notification <passage_add> : Chrono Classique 
@@ -112,7 +161,7 @@ function device.OnNotifyPassageAdd(key, params)
 		if idPassage == 0 and timePassage > 0 then -- Depart
 			device.BibRunning(bib, timePassage);
 		elseif idPassage == -1 then	-- Arriv�e
-			if timePassage == chrono.DNF or timePassage == chrono.DSQ then
+			if timePassage == chronoStatus.Abs or timePassage == chronoStatus.Dsq then
 				device.BibFinished(bib,timePassage, '', '');
 			end
 		end
@@ -201,19 +250,7 @@ function device.BibRunning(bib, timeStart)
 
 			device.bib_running:AddRow(bibRanking, true);
 			device.bib_running:OrderBy('Heure_depart_reelle Asc');
-			SetBibRunning();
 		end
-	end
-end
-
-function SetBibRunning()
-	if device.bib_running:GetNbRows() > 0 and device.tick_finished < 0 then
-		local cmd = 
-		"Update Running Set Tick = '"..app.GetTickCount().."' "..
-		",Bib = '"..device.bib_running:GetCell("Dossard", 0).."' "..
-		",Identity = '"..string.gsub(device.bib_running:GetCell("Identite", 0), "'", "''").."' "..
-		",Team = '"..string.gsub(device.bib_running:GetCell("Club", 0),"'","''").."' ";
-		device.dbTV:Query(cmd);
 	end
 end
 
@@ -233,7 +270,7 @@ function device.OnNotifyBibTime(key, params)
 		device.BibFinished(bib, time_net, rank, diff);
 	elseif idPassage >= 1 then
 		-- Inter 1, 2 ...
-		if time_net ~= chrono.DNS then
+		if time_net ~= chronoStatus.Abs then
 			device.BibInter(bib, idPassage, time_net, rank, diff);
 		end
 	end
@@ -260,13 +297,12 @@ function device.BibDelete(bib)
 	local row = device.bib_running:GetIndexRow('Dossard', bib) or -1;
 	if row >= 0 then
 		device.bib_running:RemoveRowAt(row);
-		SetBibRunning();
 	end
 end
 
 function device.BibFinished(bib, time_net, rank, diff)
 
-	if time_net == nil or time_net == chrono.DNS then return end 
+	if time_net == nil or time_net == chronoStatus.Abs then return end 
 
 	local row = device.bib_running:GetIndexRow('Dossard', bib) or -1;
 	local bib_finished = nil;
@@ -348,50 +384,10 @@ end
 
 -- Fermeture
 function device.OnClose()
-    stop_server_fp();
-	-- Fermeture Timer
-	if device.tm_running ~= nil then
-		device.tm_running:Delete();
-	end
-
-	-- Fermeture Base
-	if device.dbTV ~= nil then
-		device.dbTV:Delete();
-		device.dbTV = nil;
-	end
-	
 	-- Fermeture Toolbar 
 	if tbNavigation ~= nil then
 		local mgr = app.GetAuiManager();
 		mgr:DeletePane(tbNavigation);
-	end
-end
-
--- Evenement Timer 
-function OnTimerRunning(evt)
-
-	if device.mode == 'ranking' and device.bib_running:GetNbRows() > 0 and device.tick_finished <= 0 then
-		local timeStart = device.bib_running:GetCellInt("Heure_depart_reelle", 0);
-		local timeCurrent = app.Now() + device.offset;
-			
-		if timeCurrent >= timeStart and timeStart >= 0 then
-			local timeRunning = timeCurrent-timeStart;
-			if device.raceInfo.Code_manche > 1 then
-				timeRunning = timeRunning + device.bib_running:GetCellInt("Tps1", 0, 0);
-			end
-
-			local stringTime = app.TimeToString(math.floor((timeRunning)/100)*100);
-			stringTime = stringTime:sub(1,stringTime:len()-1); 
-
---			adv.Alert(timeRunning..' HD='..timeStart..' TC='..timeCurrent);
-			device.dbTV:Query("Update Running Set State = 'R', Time = '"..stringTime.."' Where ID = 1");
-		end
-	elseif device.tick_finished > 0 then
-		local tick = app.GetTickCount();
-		if tick > device.tick_finished + 5000 then
-			device.tick_finished = -1;
-			SetBibRunning();
-		end
 	end
 end
 
@@ -406,7 +402,7 @@ end
 function OnModeStartlist()
 	
 	device.mode = 'startlist';
-	modeLabel:SetLabel('startlist');
+	modeLabel:SetLabel('ENVOI DE LA STARTLIST');
 
 	device.dbTV:Query("Update Context Set Mode = 'startlist', Title = '"..GetTitle().."' Where ID = 1");
 
@@ -419,9 +415,8 @@ end
 function GetTitle()
 	if device.raceInfo.tables ~= nil then
 		local tEvenement = device.raceInfo.tables.Evenement;
-		local tEpreuve = device.raceInfo.tables.Epreuve;
-		if tEvenement ~= nil and tEpreuve ~= nil then
-			local title = tEvenement:GetCell('Organisateur', 0)..'|'..tEpreuve:GetCell('Code_discipline', 0);
+		if tEvenement ~= nil then
+			local title = tEvenement:GetCell('Organisateur', 0);
 			return string.gsub(title,"'", "''");
 		end
 	end
@@ -433,10 +428,10 @@ function OnModeRanking()
 	device.mode = 'ranking';
 
 	if device.raceInfo.Code_manche == 1 then
-		modeLabel:SetLabel('ranking-1');
+		modeLabel:SetLabel('ENVOI DU CLASSEMENT');
 		device.dbTV:Query("Update Context Set Mode = 'ranking', Title = '"..GetTitle().."' Where ID = 1");
 	else
-		modeLabel:SetLabel('ranking-2');
+		modeLabel:SetLabel('ENVOI DU CLASSEMENT');
 		device.dbTV:Query("Update Context Set Mode = 'ranking2', Title = '"..GetTitle().."' Where ID = 1");
 	end
 
@@ -452,6 +447,8 @@ function OnModeRanking()
 	assert(rc and data.ranking ~= nil and app.GetNameSpace(data.ranking) == 'sqlTableGC');
 
 	device.ranking = data.ranking;
+	
+	device.SetStartTime();
 
 	RefreshMode();
 end
@@ -494,13 +491,13 @@ function TvSynchroStartlist()
 		tvStartlist:GetRecord():Set('Identity', string.gsub(tRanking:GetCell('Identite', i), "'", "''"));
 		tvStartlist:GetRecord():Set('Team', string.gsub(tRanking:GetCell('Club', i),"'", "''"));
 
-		tvStartlist:GetRecord():Set('Rank1', tRanking:GetCell('Clt1', i));
+		tvStartlist:GetRecord():Set('Rank1', tRanking:GetCell('Clte1', i));
 		tvStartlist:GetRecord():Set('Time1', tRanking:GetCell('Tps1', i));
 
-		tvStartlist:GetRecord():Set('Rank2', tRanking:GetCell('Clt2', i));
+		tvStartlist:GetRecord():Set('Rank2', tRanking:GetCell('Clte2', i));
 		tvStartlist:GetRecord():Set('Time2', tRanking:GetCell('Tps2', i));
 
-		tvStartlist:GetRecord():Set('Rank', tRanking:GetCell('Clt', i));
+		tvStartlist:GetRecord():Set('Rank', tRanking:GetCell('Clte', i));
 		tvStartlist:GetRecord():Set('Time', tRanking:GetCell('Tps', i));
 
 		tvStartlist:GetRecord():Set('Epreuve', tRanking:GetCell('Code_epreuve', i));
@@ -542,6 +539,10 @@ function TvSynchroRanking()
 
 		tvRanking:GetRecord():Set('Rank', tRanking:GetCell('Clte', i));
 		tvRanking:GetRecord():Set('Time', tRanking:GetCell('Tps', i));
+		
+		tvRanking:GetRecord():Set('Cltc', tRanking:GetCell('Cltc', i));
+		tvRanking:GetRecord():Set('Cltc1', tRanking:GetCell('Cltc1', i));		
+		tvRanking:GetRecord():Set('Cltc2', tRanking:GetCell('Cltc2', i));
 		
 		tvRanking:GetRecord():Set('Epreuve', tRanking:GetCell('Code_epreuve', i));
 		tvRanking:GetRecord():Set('Categ', tRanking:GetCell('Categ', i));
