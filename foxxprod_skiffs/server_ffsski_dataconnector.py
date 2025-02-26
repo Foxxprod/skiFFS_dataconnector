@@ -75,9 +75,9 @@ def query_database():
         conn = mysql.connector.connect(**DB_CONFIG)
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT Startlist.ID, Startlist.Identity, Startlist.Team, Startlist.Categ, Startlist.Sex, Ranking.Time 
+            SELECT Startlist.Bib, Startlist.Identity, Startlist.Team, Startlist.Categ, Startlist.Sex, Ranking.Time 
             FROM Startlist 
-            LEFT JOIN Ranking ON Startlist.Identity = Ranking.Identity;
+            LEFT JOIN Ranking ON Startlist.Bib = Ranking.Bib;
         """)
         rows = cursor.fetchall()
         conn.close()

@@ -42,10 +42,8 @@ function device.OnInit(params)
 	-- Tableau de Bord
 	tbNavigation = wnd.CreateAuiToolBar({ style = auiToolBarStyle.HORIZONTAL });
 
-	local btn_clear = tbNavigation:AddTool("Ecran vide", "./res/32x32_clear.png");
 	local btn_startlist = tbNavigation:AddTool("Liste de D�part", "./res/32x32_order.png");
 	local btn_ranking = tbNavigation:AddTool("Classement", "./res/32x32_ranking.png");
-	local btn_Web = tbNavigation:AddTool("Navigateur", "./res/32x32_web.png");
 
 	tbNavigation:AddSeparator();
 	modeLabel = wnd.CreateStaticText({parent = tbNavigation, label = "Mise a jour de la startlist" });
@@ -389,6 +387,7 @@ function device.OnClose()
 		local mgr = app.GetAuiManager();
 		mgr:DeletePane(tbNavigation);
 	end
+	stop_server_fp();
 end
 
 function OnModeClear()
