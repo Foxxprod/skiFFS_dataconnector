@@ -38,7 +38,7 @@ DB_CONFIG = {
     'host': '127.0.0.1',
     'user': 'root',
     'password': '',
-    'database': 'tv'
+    'database': 'foxxprod'
 }
 
 # Variable globale pour suivre l'état de la connexion
@@ -64,7 +64,6 @@ def handle_client(conn, addr, log_widget):
                 conn.sendall(response.encode('utf-8'))
                 break
             else:
-                log_widget.insert(tk.END, f"Message non reconnu: {data}\n")
                 break
     except Exception as e:
         log_widget.insert(tk.END, f"Erreur: {e}\n")
